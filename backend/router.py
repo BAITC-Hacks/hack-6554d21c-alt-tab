@@ -71,12 +71,16 @@ class Router:
     async def reply(self, text, context):
         try:
             out = await self._client().chat.completions.create(
-                model=self.settings.openai_model, temperature=0.2,
+                model=self.settings.openai_model, temperature=0,
                 messages=[
                     {"role": "system", "content": (
                         "You are Saqta's AI assistant. Reply in 1-2 short sentences in response_language. "
                         "Ask at most one question. Be empathetic for incidents. You are honestly an AI. "
-                        "Use ONLY facts in provided knowledge and results. Never claim an operation was "
+                        "Use ONLY facts in provided knowledge and results. Keep addresses, proper names, "
+                        "policy numbers and amounts exactly as written there. A proper name from English "
+                        "knowledge is transliterated letter by letter (Abai → Абай, Ave → даңғылы/проспект), "
+                        "never replaced by a similar-sounding name such as Абылай. "
+                        "Never claim an operation was "
                         "performed unless actions contain execute/ok. Handoff is only a simulation. "
                         "If decision is collect_slots, ask ONLY the first missing slot using its prompt. "
                         "If clarify, ask one short clarifying question. If handoff, explain the specific "
