@@ -265,7 +265,7 @@ frontend/         React + Vite симулятор: чат, микрофон, п�
 scripts/          dev.py (запуск всего), evaluate_router.py, run_dialogs.py,
                   e2e_live_voice.mjs, smoke_transport.py, install-livekit.ps1
 tests/backend/    pytest: router, service, executor, API и voice-адаптер
-ТЗ/               рабочее ТЗ, план команды, API-контракт, ADR по архитектуре
+ТЗ/               api-contract.md — контракт API v2 между frontend и backend
 *.json            данные кита без изменений · evaluate.py — оценщик организаторов
 THIRD_PARTY.md    происхождение заимствованных фрагментов ALTCALL
 ```
@@ -276,8 +276,6 @@ THIRD_PARTY.md    происхождение заимствованных фра
 
 | Документ | Содержание |
 |---|---|
-| [ТЗ/requirements.md](ТЗ/requirements.md) | Рабочее ТЗ: обязательные требования и порядок приёмки |
 | [ТЗ/api-contract.md](ТЗ/api-contract.md) | Контракт API v2 между frontend и backend |
-| [ТЗ/architecture.md](ТЗ/architecture.md) | ADR: почему LiveKit на базе ALTCALL |
 | [frontend/README.md](frontend/README.md) | Симулятор: запуск, режимы Live/Mock, обработка ошибок |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Что заимствовано из ALTCALL и как |
