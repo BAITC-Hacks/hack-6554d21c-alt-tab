@@ -10,7 +10,7 @@ export const actionSchema = z.discriminatedUnion('status', [
   z.object({ ...actionBase, status: z.literal('ok'), result: z.json() }),
   z.object({ ...actionBase, status: z.literal('error'), error: z.object({ code: id, message: z.string() }) }),
 ])
-export const healthSchema = z.object({ status: z.literal('ok'), mode: z.enum(['live', 'mock']), voice_ready: z.boolean() })
+export const healthSchema = z.object({ status: z.literal('ok'), mode: z.enum(['live', 'mock']), voice_ready: z.boolean(), voice_configured: z.boolean().default(false), missing_config: z.array(z.string()).default([]), models: z.record(z.string(), z.unknown()).default({}) })
 export const sessionSchema = z.object({ session_id: id, as_of_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
 export const turnSchema = z.object({
   session_id: id, request_id: id, turn_id: id, turn: z.number().int().positive(),
@@ -32,12 +32,16 @@ export type TurnResult = z.infer<typeof turnSchema>
 export type Health = z.infer<typeof healthSchema>
 export type Session = z.infer<typeof sessionSchema>
 export type Mode = 'live' | 'mock'
-export type PlaybackBasis = 'recording_stop_to_playing' | 'text_submit_to_playing'
-export interface PlaybackMeasurement { ms: number; basis: PlaybackBasis; includesUserDelay: boolean }
-export interface DisplayTurn { result: TurnResult; startedAt: number; basis: PlaybackBasis; playback?: PlaybackMeasurement }
+export const roomSchema = z.object({
+  room: id, token: id, ws_url: z.string().url().refine(value => /^wss?:/.test(value)),
+  session_id: id, trace_topic: z.literal('saqta.trace'),
+})
+export type RoomCredentials = z.infer<typeof roomSchema>
+export interface DisplayTurn { result: TurnResult; source: 'text' | 'voice' | 'history' }
 export interface VoiceApi {
   health(signal?: AbortSignal): Promise<Health>
   createSession(signal?: AbortSignal): Promise<Session>
   text(sessionId: string, requestId: string, text: string, signal?: AbortSignal): Promise<TurnResult>
-  audio(sessionId: string, requestId: string, blob: Blob, signal?: AbortSignal): Promise<TurnResult>
+  history(sessionId: string, signal?: AbortSignal): Promise<TurnResult[]>
+  livekit(sessionId: string, signal?: AbortSignal): Promise<RoomCredentials>
 }

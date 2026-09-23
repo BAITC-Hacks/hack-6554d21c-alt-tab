@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { healthSchema, sessionSchema, turnSchema, type VoiceApi, type TurnResult } from './types'
+import { healthSchema, sessionSchema, turnSchema, roomSchema, type VoiceApi, type TurnResult } from './types'
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public retryable = false, public status = 0, public requestId?: string) {
@@ -7,11 +7,10 @@ export class ApiError extends Error {
   }
 }
 
-export function safeAudioUrl(value: string): boolean {
-  // Relative same-origin paths only. Backslashes are normalized by URL parsers.
-  return /^\/(?!\/)/.test(value) && !/[\\\s]/.test(value)
+export function normalizeTurn(result: TurnResult): TurnResult {
+  if (!result.audio_url) return result
+  return { ...result, audio_url: null, warnings: [...result.warnings, { stage: 'tts', code: 'unsupported_audio_url', message: 'Аудиофайл не используется в LiveKit. Текст и результат действия сохранены.' }] }
 }
-
 export function createLiveApi({ fetcher = globalThis.fetch.bind(globalThis), timeoutMs = 90_000 }: { fetcher?: typeof fetch; timeoutMs?: number } = {}): VoiceApi {
   async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}, signal?: AbortSignal, requestId?: string): Promise<T> {
     const controller = new AbortController()
@@ -43,10 +42,10 @@ export function createLiveApi({ fetcher = globalThis.fetch.bind(globalThis), tim
   }
   const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   function checkTurn(result: TurnResult, sessionId: string, requestId: string): TurnResult {
-    if (result.session_id !== sessionId || result.request_id !== requestId || (result.audio_url !== null && !safeAudioUrl(result.audio_url))) {
-      throw new ApiError('Ответ содержит неверный ID запроса или недопустимый адрес аудио.', 'invalid_response', true, 0, requestId)
+    if (result.session_id !== sessionId || result.request_id !== requestId) {
+      throw new ApiError('Ответ содержит неверный ID сессии или запроса.', 'invalid_response', true, 0, requestId)
     }
-    return result
+    return normalizeTurn(result)
   }
   return {
     health: signal => request('/health', healthSchema, {}, signal),
@@ -56,14 +55,14 @@ export function createLiveApi({ fetcher = globalThis.fetch.bind(globalThis), tim
       const result = await request(`/sessions/${encodeURIComponent(sessionId)}/turns`, turnSchema, json({ request_id: requestId, text: text.trim() }), signal, requestId)
       return checkTurn(result, sessionId, requestId)
     },
-    async audio(sessionId, requestId, blob, signal) {
-      if (!blob.size || blob.size > 10 * 1024 * 1024) throw new ApiError('Запись должна быть непустой и не больше 10 МиБ.', 'invalid_audio')
-      const ext = blob.type.includes('webm') ? 'webm' : blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : null
-      if (!ext) throw new ApiError('Формат записи не поддерживается. Используйте текстовый ввод.', 'unsupported_mime')
-      const body = new FormData()
-      body.append('request_id', requestId); body.append('audio', blob, `recording.${ext}`)
-      const result = await request(`/sessions/${encodeURIComponent(sessionId)}/audio`, turnSchema, { method: 'POST', body }, signal, requestId)
-      return checkTurn(result, sessionId, requestId)
+    async history(sessionId, signal) {
+      const value = await request(`/sessions/${encodeURIComponent(sessionId)}/turns`, z.object({ turns: z.array(turnSchema) }), {}, signal)
+      return value.turns.map(turn => checkTurn(turn, sessionId, turn.request_id))
+    },
+    async livekit(sessionId, signal) {
+      const value = await request(`/sessions/${encodeURIComponent(sessionId)}/livekit`, roomSchema, json({}), signal)
+      if (value.session_id !== sessionId) throw new ApiError('Комната принадлежит другой сессии.', 'invalid_response')
+      return value
     },
   }
 }
