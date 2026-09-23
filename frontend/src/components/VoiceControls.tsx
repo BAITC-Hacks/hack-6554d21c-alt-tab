@@ -37,6 +37,7 @@ export function VoiceControls({ api, sessionId, disabled, health, mode, onTrace,
   }, [])
   function start() { if (!sessionId) return; setError(null); void voice.current?.start(sessionId) }
   const configured = health?.voice_configured === true
+  const connecting = phase === 'mic' || phase === 'connecting'
   return <div className="voice-section">
     <div ref={container} className="remote-audio" aria-hidden="true"/>
     {error && <div className="error-box" role="alert"><p>{error.message}</p>{error.requestId && <p>request_id: <code>{error.requestId}</code></p>}</div>}
@@ -44,8 +45,16 @@ export function VoiceControls({ api, sessionId, disabled, health, mode, onTrace,
     <div className="voice-controls">
       {phase === 'idle'
         ? <button className="button primary" disabled={disabled || !configured || mode === 'mock'} onClick={start}><Icon name="mic"/>Начать разговор</button>
-        : <button className="button recording" onClick={() => { voice.current?.stop(); callbacks.current.onRecover() }}><Icon name="stop"/>{phase === 'mic' || phase === 'connecting' ? 'Отменить подключение' : 'Завершить разговор'}</button>}
-      <p className="small muted">{mode === 'mock' ? 'Голос доступен только в Live' : phase === 'mic' ? 'Разрешите доступ к микрофону в браузере.' : phase !== 'idle' ? 'Микрофон открыт. Завершите разговор для ввода текста.' : configured ? health?.voice_ready ? 'Голос настроен. Можно подключиться.' : 'Настройки есть; живой голос ещё не проверен.' : 'Голос не настроен. Используйте текст.'}</p>
+        : <button className={`button recording ${connecting ? 'connecting' : ''}`} onClick={() => { voice.current?.stop(); callbacks.current.onRecover() }}><Icon name="stop"/>{connecting ? 'Отменить подключение' : 'Завершить разговор'}</button>}
+      <p className={`small ${phase === 'idle' ? 'muted' : 'voice-state'}`}>
+        {phase !== 'idle' && <span className={`live-dot ${connecting || (phase === 'connected' && !ready) ? 'waiting' : speaking && !blocked ? 'speaking' : ''}`} aria-hidden="true"/>}
+        {mode === 'mock' ? 'Голос доступен только в Live'
+          : phase === 'mic' ? 'Разрешите доступ к микрофону в браузере.'
+          : phase === 'connecting' ? 'Подключаемся к голосовому каналу…'
+          : phase === 'reconnecting' ? 'Восстанавливаем соединение…'
+          : phase === 'connected' ? (!ready ? 'Соединение есть. Ждём помощника…' : speaking && !blocked ? 'Говорит помощник.' : 'Слушаю. Говорите своими словами.')
+          : configured ? health?.voice_ready ? 'Голос настроен. Можно подключиться.' : 'Настройки есть; живой голос ещё не проверен.' : 'Голос не настроен. Используйте текст.'}
+      </p>
     </div>
     {mode === 'live' && !configured && Boolean(health?.missing_config.length) && <details className="small muted"><summary>Чего не хватает для голоса</summary><p>{health!.missing_config.join(', ')}</p></details>}
   </div>
