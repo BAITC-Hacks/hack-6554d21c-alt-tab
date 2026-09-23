@@ -183,7 +183,12 @@ Dev-набор используется как диагностика, а не �
 
 ## Быстрый старт
 
-Нужны: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 24, Chrome. Ключи OpenAI и Soniox. Данные сессий живут в памяти и сбрасываются при перезапуске.
+Нужны: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 24, Chrome. Данные сессий живут в памяти и сбрасываются при перезапуске.
+
+Ключи провайдеров (вставить в `.env`):
+
+- `OPENAI_API_KEY` — <https://platform.openai.com/api-keys> (модель GPT-4.1 mini).
+- `SONIOX_API_KEY` — зарегистрироваться на <https://console.soniox.com>, раздел **API Keys** → Create. Новому аккаунту даётся стартовый бесплатный баланс, его хватает на демо. Один ключ работает и для STT, и для TTS.
 
 **1. Backend и LiveKit** (Windows, PowerShell):
 
@@ -195,6 +200,8 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }   # заполнит�
 powershell -ExecutionPolicy Bypass -File scripts/install-livekit.ps1
 .venv/Scripts/python scripts/dev.py
 ```
+
+На macOS и Linux: те же команды `uv sync` и копирование `.env`, вместо `install-livekit.ps1` нужен запущенный Docker Desktop, путь к интерпретатору — `.venv/bin/python`.
 
 Одна команда `scripts/dev.py` поднимает локальный LiveKit, HTTP API на `:8000` и голосовой worker. Swagger: <http://127.0.0.1:8000/docs>. Установщик скачивает официальный LiveKit 1.13.7 и сверяет SHA-256. Если нативный LiveKit не установлен, `dev.py` сам поднимет контейнер из `deploy/compose.yaml` через Docker Desktop. Если LiveKit уже слушает порт 7880, запускать с флагом `--external-livekit`.
 
