@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv/
+.cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+frontend/node_modules/
+frontend/dist/
+artifacts/
+# Local planning and agent instructions
+/ТЗ/*
+!/ТЗ/api-contract.md
+/AGENTS.md
