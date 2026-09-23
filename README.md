@@ -1,231 +1,283 @@
-# Voice Router — Dataset
+# Saqta Voice Router
 
-Case 2 dataset: a voice AI agent for the contact center of **Saqta Insurance**. The agent picks the right scenario with an LLM layer (no intent classifier) and talks like a good human operator, in Kazakh and Russian.
+**Голосовой AI-оператор контакт-центра страховой компании.** Клиент говорит в микрофон на русском, казахском или на смеси языков. LLM выбирает один из 40 сценариев Saqta Insurance, сервер выполняет шаг сценария на синтетических данных, клиент слышит ответ голосом. Супервизор после каждой реплики видит трассу решения.
 
-All data is synthetic. Saqta Insurance, its products, prices, rules, clients, addresses and clinics are fictional and simplified. They do not reflect real legislation.
+Команда **Alt-Tab** · HackAlem AI 2026 · кейс 2 «Voice Router»
 
-**Snapshot date:** `2026-10-01`. Treat it as "today".
+> Данные стартового кита (`scenarios.json`, `slots.json`, `actions.json`, `knowledge_base.json`, `mock_backend.json`, `dev_utterances.json`, `dialogs_sample.json`, `evaluate.py`) сохранены без изменений и загружаются с диска. Все данные синтетические: Saqta Insurance, клиенты, полисы и цены вымышлены организаторами.
 
-## Company
+---
 
-**Saqta Insurance** — general (non-life) insurer in Kazakhstan. Founded 2009, HQ in Almaty, 8 branches, ~600,000 clients. Serves individuals and companies in Kazakh and Russian.
+## Содержание
 
-| Line | Products |
+1. [Зачем это нужно](#зачем-это-нужно)
+2. [Что умеет](#что-умеет)
+3. [Как выглядит один ход](#как-выглядит-один-ход)
+4. [Архитектура](#архитектура)
+5. [Как принимается решение](#как-принимается-решение)
+6. [Метрики](#метрики)
+7. [Быстрый старт](#быстрый-старт)
+8. [Проверки](#проверки)
+9. [Ограничения](#ограничения)
+10. [Структура репозитория](#структура-репозитория)
+11. [Команда и документы](#команда-и-документы)
+
+---
+
+## Зачем это нужно
+
+Контакт-центр страховой компании принимает звонки, где одно и то же слово означает разные вещи. «Авария» — это ДТП прямо сейчас (срочно), заявление пострадавшего по ОГПО виновника или убыток по КАСКО. «Выплату одобрили, но мало» — не запрос статуса, а спор с решением. Клиент может начать на казахском, закончить на русском и в одной фразе попросить две вещи.
+
+Классический IVR с кнопками здесь не работает, а энкодерный классификатор намерений запрещён правилами кейса. Наше решение: **LLM читает весь каталог сценариев с границами `not_this_if` и сама объясняет, почему выбрала именно этот сценарий.** Голос и текст проходят через одну и ту же бизнес-логику, поэтому поведение агента одинаково в любом канале.
+
+## Что умеет
+
+| Возможность | Состояние |
 |---|---|
-| Auto | OGPO (mandatory motor third-party liability), CASCO (voluntary car insurance) |
-| Health | DMS (voluntary health insurance): mostly corporate, also individual |
-| Travel | Medical insurance for trips abroad, 24/7 medical assistance |
-| Property | Apartments and houses |
-| Accident | Personal accident insurance |
+| Живой голос в браузере: микрофон → STT → LLM → TTS → динамики | ✅ Проверено в Chrome на RU, KK и mixed репликах |
+| Маршрутизация по 40 сценариям + 3 системным намерениям | ✅ Каталог загружается из `scenarios.json`, ID валидируются |
+| Русский, казахский, смешанная речь | ✅ Язык определяется моделью, ответ — на языке клиента |
+| Несколько намерений в одной фразе | ✅ Срочное первым, остальные — в очередь сессии и исполняются следом |
+| Извлечение и проверка слотов (43 типа из `slots.json`) | ✅ Один уточняющий вопрос за ход |
+| Трасса решения после каждой реплики | ✅ Сценарии, confidence, альтернативы, обоснование, слоты, действия, задержки |
+| Политика уверенности: выбор / уточнение / оператор | ✅ Пороги 0.75 и 0.45 из правил кита |
+| Все 31 mock-действие из `actions.json` | ✅ Data-driven исполнитель над копией `mock_backend.json` в памяти сессии |
+| Идентификация клиента по телефону или ИИН | ✅ Номер полиса или заявления подставляется из данных клиента |
+| Расчёты по формулам базы знаний | ✅ Цены ОГПО, travel, возврат при расторжении КАСКО сверены с диалогами кита |
+| Preview → явное согласие → execute для необратимых действий | ✅ Согласие привязано к параметрам preview, новые параметры снимают старый preview |
+| Идемпотентность: повтор `request_id` не повторяет действие | ✅ |
+| Честный отказ: ошибка провайдера или данных не превращается в фиктивный успех | ✅ Коды ошибок только из `error_codes` кита, клиент слышит понятное сообщение |
+| Передача оператору с резюме контекста | ✅ Очередь из `actions.json`, в UI помечена как симуляция |
 
-Not offered: life insurance, pension annuities, loans. Such requests are `SYS_OUT_OF_SCOPE`.
+## Как выглядит один ход
 
-Contact center: sales Mon–Sat 08:00–20:00, claims and medical assistance 24/7.
+Реальный прогон в браузере 2026-09-23 (Chrome → LiveKit → Soniox → GPT-4.1 mini). Клиент говорит смешанной речью и просит две вещи сразу:
 
-**What makes insurance calls hard**
-- The same words mean different scenarios: "авария" can be *accident right now* (SC11), *victim claim* (SC12) or *CASCO claim* (SC13).
-- Status vs. dispute: "выплату одобрили, но мало" is a dispute (SC19), not a status request (SC17).
-- Urgent cases (accident on the road, illness abroad, fraud) must be recognized and handled first.
-- Clients switch topics and languages mid-sentence.
-- Many actions are irreversible (issue, change, cancel a policy, file a claim) and need explicit confirmation.
+> 🎤 **Клиент:** «Маған терапевтке жазылу керек, и ещё список клиник в Алматы»
 
-## Files
-
-| File | Content |
-|---|---|
-| `scenarios.json` | 40 scenarios + 3 system intents |
-| `slots.json` | Slot catalog: types, formats, questions in ru/kk |
-| `actions.json` | Mock backend actions and handoff queues |
-| `knowledge_base.json` | Company facts: offices, products, prices, rules, documents, clinics |
-| `mock_backend.json` | 11 clients, 11 policies, 4 claims, 2 payments |
-| `dialogs_sample.json` | 10 annotated example dialogs |
-| `dev_utterances.json` | 104 labeled utterances for measuring accuracy |
-| `evaluate.py` | Reference scorer for your router on the dev set |
-
-## Scenarios
-
-| ID | Scenario | Domain | Category | Priority |
-|---|---|---|---|---|
-| SC01 | OGPO price quote | auto | sales | normal |
-| SC02 | OGPO purchase | auto | sales | normal |
-| SC03 | CASCO consultation and quote | auto | sales | normal |
-| SC04 | Add driver to motor policy | auto | servicing | normal |
-| SC05 | Change vehicle or plate in policy | auto | servicing | normal |
-| SC06 | Travel insurance purchase | travel | sales | normal |
-| SC07 | Home insurance consultation | property | sales | normal |
-| SC08 | Accident insurance consultation | accident | sales | normal |
-| SC09 | Individual health insurance consultation | health | sales | normal |
-| SC10 | Corporate insurance request | corporate | sales | normal |
-| SC11 | Road accident just happened | auto | claims | urgent |
-| SC12 | Claim as victim under culprit's OGPO | auto | claims | high |
-| SC13 | CASCO damage claim | auto | claims | high |
-| SC14 | Property damage claim | property | claims | high |
-| SC15 | Medical event abroad | travel | claims | urgent |
-| SC16 | Accident injury claim | accident | claims | high |
-| SC17 | Claim status | general | claims | normal |
-| SC18 | Documents for a claim | general | claims | normal |
-| SC19 | Disagreement with claim decision | general | claims | high |
-| SC20 | Book vehicle inspection | auto | claims | normal |
-| SC21 | Doctor appointment under DMS | health | servicing | normal |
-| SC22 | DMS coverage check | health | servicing | normal |
-| SC23 | Partner clinics list | health | info | normal |
-| SC24 | DMS e-card issue | health | servicing | normal |
-| SC25 | Check policy validity | general | servicing | normal |
-| SC26 | Resend policy documents | general | servicing | normal |
-| SC27 | Policy renewal | general | sales | normal |
-| SC28 | Policy termination and refund | general | servicing | normal |
-| SC29 | Update contact details | general | servicing | normal |
-| SC30 | Charged but policy not issued | general | servicing | high |
-| SC31 | Payment methods and installments | general | info | normal |
-| SC32 | Bonus-malus class and price change | auto | info | normal |
-| SC33 | Office addresses and hours | general | info | normal |
-| SC34 | Mobile app and account help | general | info | normal |
-| SC35 | Service complaint | general | feedback | high |
-| SC36 | Callback request | general | contact | normal |
-| SC37 | Request a human operator | general | contact | normal |
-| SC38 | Suspicious call or fraud report | general | security | urgent |
-| SC39 | Certificate or document copy request | general | servicing | normal |
-| SC40 | Policy terms explanation | general | info | normal |
-
-System intents: `SYS_OUT_OF_SCOPE` (not about Saqta services), `SYS_UNCLEAR` (ask one clarifying question), `SYS_GOODBYE`.
-
-### scenarios.json
-
-| Field | Notes |
-|---|---|
-| `scenario_id`, `slug`, `name` | `SC01`…`SC40` |
-| `domain` | `auto`, `health`, `travel`, `property`, `accident`, `corporate`, `general` |
-| `category` | `sales`, `claims`, `servicing`, `info`, `feedback`, `contact`, `security` |
-| `description` | What the client wants. Main input for the LLM router |
-| `not_this_if` | Boundary rules: `{condition, use_instead}`. Use them in the router prompt |
-| `priority` | `normal`, `high`, `urgent`. Urgent goes first in multi-intent turns |
-| `fast_path_eligible` | Simple informational scenario, can be served by a cheap fast path |
-| `requires_identification` | Client must be identified (phone, IIN, policy or claim number) before actions |
-| `slots.required`, `slots.optional` | Names from `slots.json`. Slots can be filled from the client profile or earlier turns |
-| `actions` | Names from `actions.json` |
-| `requires_confirmation` | `true` if the scenario runs an irreversible action. Read back and get an explicit "yes" first |
-| `handoff` | `{when, queue}` or `null` |
-| `examples` | 4 ru + 3 kk example utterances |
-| `responses` | `opening` and `closing` lines in ru and kk. Style reference, not a script. `{placeholders}` come from slots or action outputs |
-
-### slots.json
-
-`name`, `type` (`string`, `enum`, `integer`, `date`, `boolean`, `list`, `text`), `description`, `pattern` or `values`, `prompt.ru`, `prompt.kk`.
-
-Normalize spoken values: "восемь семьсот один…" → `+7701…`, "ертең" → date, "двадцатого года" → `2020`. Dates are resolved against the snapshot date.
-
-### actions.json
-
-`name`, `description`, `inputs`, `outputs`, `errors`, `irreversible`. Implement them as mocks over `mock_backend.json` and `knowledge_base.json`. `queues` lists handoff targets.
-
-Errors use one format: `{"error": {"code": "not_found", "message": "..."}}`. Codes are listed in `error_codes`, expected agent behavior in `error_handling`. Example: unknown phone → `find_client` returns `not_found` → the agent re-asks once, then offers another identifier or an operator.
-
-Irreversible actions: `create_policy`, `renew_policy`, `update_policy`, `cancel_policy`, `create_claim`, `create_dispute`, `book_inspection`, `book_appointment`, `update_contact`.
-
-### knowledge_base.json
-
-Company facts, offices, inspection points, products with pricing formulas, clinics, claim rules and document lists, payments, cancellation, bonus-malus, app help, fraud policy, complaints. The agent must answer from this file, not invent facts.
-
-### mock_backend.json
-
-`clients`, `policies`, `claims`, `payments`. IDs: `C001`, `SQ-OGPO-104501`, `CL-500287`, `P-3001`. Unknown IIN → bonus-malus class `3`. Prices in the backend follow the formulas in the knowledge base. New IDs created by your mocks must not collide with existing ones.
-
-### dialogs_sample.json
-
-Each dialog: `dialog_id`, `title`, `tags`, `client_id`, `turns`. Client turns: `text`, `lang`, `scenarios` (expected, in order), `slots` (extracted in this turn). Bot turns: `text`, `lang`, `actions` (`mode: preview` = shown for confirmation, `execute` = done).
-
-Covers: scenario switch, topic switch and return, mixed speech, language switch, clarification, handoff, irreversible action with confirmation.
-
-### dev_utterances.json
-
-`id`, `text`, `lang` (`ru`, `kk`, `mixed`), `expected` (ordered list of scenario IDs), `type` (`single`, `multi_intent`, `out_of_scope`, `unclear`). 84 single, 13 multi-intent, 4 out of scope, 3 unclear; 7 mixed-language. The jury uses a different, hidden set of the same kind.
-
-```
-python evaluate.py predictions.json dev_utterances.json
-```
-
-`predictions.json`: `{"U001": ["SC01"], "U085": ["SC27", "SC04"], ...}`. Reports primary accuracy, full match and multi-intent recall, split by language and type.
-
-## Reference architecture
-
-```
- mic ──► STT (streaming) ──► Layer 1: Triage ──► Layer 2: LLM Router ──► Decision policy ──► Scenario executor ──► Response ──► TTS ──► speaker
-                                   │                    │                       │                     │                 │
-                                   └────────────── Dialog state (language, client, active scenario, stack, slots) ──────┘
-                                                                   │
-                                                             Trace panel
-```
-
-**Layer 1 — Triage** (fast, per utterance)
-- Language: `ru`, `kk` or `mixed`; reply in the client's dominant language, switch when the client switches.
-- Normalization: numbers, phones, plates, dates.
-- Urgency signals: accident now, abroad and ill, fraud.
-- Split multi-intent utterances into parts.
-
-**Layer 2 — LLM Router**
-- Input: utterance (or part), dialog state, scenario catalog (`description`, `not_this_if`, a few examples).
-- Output (contract):
+Что увидел супервизор в панели трассы (сокращённый `TurnResult`, значения из лога прогона):
 
 ```json
 {
+  "turn": 1,
+  "transcript": "Маған терапевтке жазылу керек, и ещё список клиник в Алматы.",
+  "language": "kk",
+  "response_language": "kk",
   "scenarios": [
-    {"scenario_id": "SC30", "confidence": 0.86, "reason": "money charged, policy not issued"},
-    {"scenario_id": "SC29", "confidence": 0.78, "reason": "moved, wants to change address"}
+    {"scenario_id": "SC21", "confidence": 0.9},
+    {"scenario_id": "SC23", "confidence": 0.8}
   ],
-  "alternatives": [{"scenario_id": "SC26", "confidence": 0.31}],
-  "language": "ru",
-  "slots": {"payment_date": "2026-09-30"},
-  "is_continuation": false
+  "decision": "collect_slots",
+  "slots": {"doctor_specialty": "терапевт", "city": "Almaty"},
+  "missing_slots": ["policy_number", "preferred_date"],
+  "queued_scenarios": ["SC23"],
+  "reply": "Полис нөмірі қолыңызда болса, айтып жіберіңізші.",
+  "latency_ms": {"stt": null, "router": 1820, "response": 696, "tts_first_audio": null, "total": null}
 }
 ```
 
-**Decision policy**
-- `confidence ≥ 0.75` → run the scenario.
-- `0.45–0.75` → `SYS_UNCLEAR`: one short question with the top-2 options.
-- `< 0.45` twice in a row, or client asks → handoff with context.
-- Several scenarios → `urgent` first, then in spoken order; confirm you will handle the rest.
-- Continuation of the active scenario → fill slots, do not re-route.
+> 🔊 **Агент (на казахском):** «Полис нөмірі қолыңызда болса, айтып жіберіңізші» — просит номер полиса ДМС, чтобы записать к терапевту. Список клиник (SC23) ждёт в очереди сессии и исполнится после записи.
 
-**Scenario executor** — state machine per scenario: identify client if needed → ask missing slots one by one → call actions → read back and confirm irreversible actions → close. On topic switch, push the current scenario to a stack and offer to return after the new one is done.
+Оба намерения распознаны, слоты извлечены из одной фразы, ответ дан на языке клиента. Язык помечен `kk`, а не `mixed`: казахских слов больше. `null` в задержках означает «не измерено», а не «ноль»: worker пока не снимает STT и время до первого звука.
 
-**Response** — LLM generation constrained by scenario, slots, action results and the knowledge base. Never state a fact that is not in the data.
+## Архитектура
 
-**Fast path (optional)** — `fast_path_eligible` scenarios can be served without the full LLM call. Measure the latency gain.
+```mermaid
+flowchart LR
+    subgraph Browser["Браузер · React + Vite"]
+        MIC[🎤 Микрофон]
+        UI[Чат + панель трассы]
+        SPK[🔊 Динамики]
+    end
 
-## Conversation rules
+    subgraph Voice["Голосовой контур"]
+        LK[LiveKit<br/>WebRTC-сервер]
+        W[Voice worker<br/>livekit-agents]
+        STT[Soniox STT<br/>stt-rt-v5 · ru/kk]
+        TTS[Soniox TTS<br/>tts-rt-v2]
+    end
 
-- 1–2 short sentences per turn. One question at a time.
-- Acknowledge first, then act: "Сочувствую, давайте оформим."
-- Empathy in claims and complaints, calm speed in urgent cases.
-- Numbers for speech: "тридцать восемь тысяч тенге", not "38000 KZT".
-- Mask personal data when reading back: `r***@mail.example`.
-- Read back and get an explicit "yes" before irreversible actions.
-- If asked "are you a robot?", answer honestly.
-- Hand off to a human with a short context summary, so the client does not repeat themselves.
+    subgraph Backend["FastAPI · единая бизнес-логика"]
+        API["/api/sessions/{id}/turns"]
+        SVC[TurnService<br/>сессия · слоты · очередь · политика]
+        RT[LLM Router<br/>GPT-4.1 mini]
+        EX[Executor<br/>31 действие · preview/execute]
+        RP[LLM Reply<br/>GPT-4.1 mini]
+        KB[(Каталог + KB + mock_backend<br/>из JSON кита)]
+    end
 
-## Trace (show after each client turn)
-
-```json
-{
-  "turn": 3,
-  "transcript": "...",
-  "language": "mixed",
-  "scenarios": [{"scenario_id": "SC21", "confidence": 0.9}],
-  "alternatives": [{"scenario_id": "SC23", "confidence": 0.4}],
-  "reason": "...",
-  "slots": {"doctor_specialty": "therapist"},
-  "actions": ["find_client", "book_appointment:preview"],
-  "latency_ms": {"stt": 0, "triage": 0, "router": 0, "response": 0, "tts_first_audio": 0, "total": 0}
-}
+    MIC -->|WebRTC| LK --> W --> STT
+    STT -->|текст реплики| API
+    UI -->|текстовый резерв| API
+    API --> SVC --> RT
+    SVC --> EX --> KB
+    SVC --> RP
+    SVC -->|TurnResult + trace| W
+    W -->|data channel saqta.trace| UI
+    W --> TTS --> LK --> SPK
 ```
 
-## Evaluation
+| Слой | Технологии | Роль |
+|---|---|---|
+| Frontend | React 19, TypeScript, Vite, `livekit-client`, Zod | Диалог слева, трасса хода справа. Микрофон, звук, autoplay, восстановление истории |
+| Транспорт | LiveKit (локальный, WebRTC) | Звук в обе стороны и data channel для трассы |
+| Voice worker | `livekit-agents`, Soniox STT/TTS, Silero VAD | Распознаёт речь, вызывает тот же HTTP `/turns`, озвучивает ответ |
+| Backend | FastAPI, Python 3.12, OpenAI SDK | Сессии, LLM-router, слоты, политика уверенности, исполнитель, трасса |
+| LLM | GPT-4.1 mini, `temperature=0` | Выбор сценариев, извлечение слотов, разбор согласия, реплика агента |
 
-- The jury reads 10 hidden utterances live: simple, topic switch, boundary, mixed language, Kazakh, and requests that must not be routed to a business scenario.
-- Each utterance, up to 3 points: correct primary scenario; all scenarios for multi-intent (otherwise correct reply language); answer quality against the data.
-- Latency is optional and gives bonus points only; a slow solution loses nothing. Measured as end of client speech → first audio of the reply (`latency_ms.total`), median over the set: ≤ 1.5 s → +2, ≤ 3 s → +1, > 3 s → 0. The jury spot-checks with a stopwatch.
-- Personas in the hidden set use clients from `mock_backend.json`. Your agent must identify them by phone number and use their data.
+**Ключевые решения**
 
-## Allowed tools
+- **Одна бизнес-логика для голоса и текста.** Worker не думает сам, он вызывает тот же `POST /turns`, что и текстовый ввод. Состояние живёт только в HTTP-сервисе.
+- **Исполнитель управляется данными.** Интерфейсы действий, необратимость, очереди handoff и коды ошибок берутся из `actions.json`, формулы — из `knowledge_base.json`. Каждая сессия работает с собственной копией `mock_backend.json` в памяти.
+- **Голосовой конвейер взят из рабочего продукта ALTCALL** (LiveKit + Soniox), а страховая логика, роутер и API написаны для кита. Что именно заимствовано: [THIRD_PARTY.md](THIRD_PARTY.md).
+- **Ключи провайдеров только на сервере.** Браузер получает токен конкретной комнаты LiveKit на 15 минут.
 
-Any external or cloud LLM, STT and TTS APIs. Intent classifiers (encoder-based models trained to map utterances to intents) are not allowed for scenario selection.
+## Как принимается решение
+
+Каждая реплика проходит один и тот же путь:
+
+1. **Router-вызов LLM.** В системный промпт входят все 40 сценариев с `description` и `not_this_if`, 3 системных намерения, каталог слотов и бизнес-дата `2026-10-01`. Модель возвращает строгий JSON: упорядоченные сценарии с confidence, альтернативы, язык, извлечённые слоты, признак продолжения, согласие или отказ на ожидающий preview и краткое обоснование на русском. ID вне каталога отбрасываются.
+2. **Политика уверенности** из правил кита:
+   - `confidence ≥ 0.75` → сценарий выбран;
+   - `0.45 ≤ confidence < 0.75` или `SYS_UNCLEAR` → один уточняющий вопрос;
+   - два хода подряд ниже `0.45`, сценарий с `handoff.when = always` или просьба клиента → передача оператору с резюме контекста.
+3. **Слоты и очередь.** Извлечённые слоты проверяются по форматам `slots.json`. Если не хватает обязательного — один вопрос. Короткий ответ («Алматы») заполняет ожидаемый слот, а не открывает новую тему. Второе и следующие намерения ставятся в очередь сессии, срочные (`urgent`) обрабатываются первыми. Когда первый сценарий завершён, следующий из очереди исполняется в том же ходу, если его слоты уже известны.
+4. **Идентификация.** `find_client` ищет клиента по телефону или ИИН в копии `mock_backend.json`. Если у клиента ровно один подходящий полис или заявление, номер подставляется без вопроса. Неизвестный клиент: один переспрос, затем handoff по `error_handling` из `actions.json`.
+5. **Исполнение.** Действия с `irreversible: true` останавливаются на preview: результат считается на копии данных и озвучивается клиенту вместе с параметрами. Согласие или отказ распознаёт LLM в следующей реплике. Исполняются ровно сохранённые параметры; изменение параметров или новая тема снимают старый preview. Обратимые действия выполняются сразу.
+6. **Reply-вызов LLM.** Отдельный запрос формирует реплику агента: 1–2 предложения, язык клиента, числа словами, имена собственные из KB не переводятся.
+7. **Трасса.** Всё выше собирается в один `TurnResult` с `turn_id`, уходит в UI по data channel и сохраняется в истории сессии.
+
+## Метрики
+
+Реальный прогон `evaluate.py` организаторов на 104 репликах dev-набора. Predictions получены настоящими вызовами GPT-4.1 mini без контекста сессии; поле `expected` модели не передавалось.
+
+| Группа | n | primary_acc | full_match |
+|---|---|---|---|
+| **all** | **104** | **0.962** | **0.962** |
+| lang=kk | 45 | 0.978 | 0.978 |
+| lang=ru | 52 | 0.942 | 0.942 |
+| lang=mixed | 7 | 1.000 | 1.000 |
+| type=single | 84 | 0.988 | 0.988 |
+| type=multi_intent | 13 | 0.923 | 0.923 |
+| type=out_of_scope | 4 | 1.000 | 1.000 |
+| type=unclear | 3 | 0.333 | 0.333 |
+
+intent_recall для multi-intent: **0.962**.
+
+**4 ошибки из 104**, все объяснимы:
+
+| ID | Реплика | Ожидалось | Получено | Почему |
+|---|---|---|---|---|
+| U030 | «Шетелде аяғымды сындырып алдым, сақтандыруым бар» | SC15 | SC16 | Травма за границей: соседние сценарии «медслучай за рубежом» и «травма по НС» |
+| U090 | «Соседи затопили квартиру, что делать и какие документы собирать?» | SC14 + SC18 | SC14 | Пропущено второе намерение «документы» |
+| U102 | «Алло, я по поводу страховки» | SYS_UNCLEAR | SC37 | Слишком короткая реплика, модель предпочла сценарий |
+| U104 | «Ну там с машиной вопрос» | SYS_UNCLEAR | SC05 | То же |
+
+Dev-набор используется как диагностика, а не как цель подгонки: хардкода проверочных реплик нет. Разница между прогонами в пределах 1–2 реплик — колебания модели.
+
+**Задержки** на прогретом соединении в браузерном прогоне: router 2,0–3,3 с, генерация ответа 0,7–2,5 с, первый запрос после старта до 9 с (холодное соединение). Сквозная задержка от конца речи до первого звука worker'ом пока не измеряется и честно возвращается как `null`.
+
+## Быстрый старт
+
+Нужны: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 24, Chrome. Ключи OpenAI и Soniox. Данные сессий живут в памяти и сбрасываются при перезапуске.
+
+**1. Backend и LiveKit** (Windows, PowerShell):
+
+```powershell
+$env:UV_CACHE_DIR = Join-Path $PWD '.cache/uv'
+$env:UV_PYTHON_INSTALL_DIR = Join-Path $PWD '.cache/python'
+uv sync --python 3.12 --all-extras --locked
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }   # заполнить OPENAI_API_KEY и SONIOX_API_KEY
+powershell -ExecutionPolicy Bypass -File scripts/install-livekit.ps1
+.venv/Scripts/python scripts/dev.py
+```
+
+Одна команда `scripts/dev.py` поднимает локальный LiveKit, HTTP API на `:8000` и голосовой worker. Swagger: <http://127.0.0.1:8000/docs>. Установщик скачивает официальный LiveKit 1.13.7 и сверяет SHA-256. Если нативный LiveKit не установлен, `dev.py` сам поднимет контейнер из `compose.yaml` через Docker Desktop. Если LiveKit уже слушает порт 7880, запускать с флагом `--external-livekit`.
+
+**2. Frontend** (отдельный терминал):
+
+```sh
+cd frontend
+npm ci
+npm run dev
+```
+
+**3. Открыть** <http://127.0.0.1:5174>, нажать «Начать разговор», разрешить микрофон, дождаться приветствия и говорить.
+
+Примеры реплик для проверки:
+
+- RU: «Где ближайший офис в Алматы?»
+- KK: «Алматыдағы кеңселеріңіз қайда?»
+- KK: «Терапевтке жазып қойыңызшы»
+- mixed: «Маған терапевтке жазылу керек, и ещё список клиник в Алматы»
+- preview → согласие: «Хочу расторгнуть КАСКО», затем «да»
+
+Без голосового контура: `scripts/dev.py --text-only` запускает только API. Текстовый ввод в UI работает как резервный канал. API стартует без ключей, но запрос к LLM вернёт 503: mock-успеха вместо провайдера нет. После изменения `.env` процессы нужно перезапустить.
+
+## Проверки
+
+```powershell
+.venv/Scripts/python -m pytest -q                     # 38 backend-тестов: router, service, executor, API, voice
+.venv/Scripts/python scripts/evaluate_router.py       # predictions реальным LLM → artifacts/
+.venv/Scripts/python evaluate.py artifacts/predictions.json dev_utterances.json
+.venv/Scripts/python scripts/run_dialogs.py           # 10 диалогов кита через живой API → отчёт
+.venv/Scripts/python scripts/smoke_transport.py       # API + LiveKit подключение
+```
+
+```sh
+cd frontend && npm test && npm run build              # 28 unit-тестов
+```
+
+Автоматическая браузерная приёмка голоса: `node scripts/e2e_live_voice.mjs <реплика.wav> <папка отчёта>` при запущенных `dev.py` и `npm run dev`. Скрипт подаёт WAV в fake-микрофон Chrome, проходит весь путь через LiveKit и worker, сохраняет лог и скриншот.
+
+Результаты браузерного прогона 2026-09-23:
+
+| Реплика | STT | Router | Ответ |
+|---|---|---|---|
+| RU «Где ближайший офис в Алматы?» | дословно | SC33 execute, `city=Almaty` | адрес и часы, RU |
+| KK «Алматыдағы кеңселеріңіз қайда?» | дословно | SC33 execute | адрес и часы, KK |
+| KK «Терапевтке жазып қойыңызшы» | дословно | SC21 collect_slots | просит номер полиса, KK |
+| mixed «Маған терапевтке жазылу керек, и ещё список клиник» | дословно | SC21 + очередь SC23 | KK, язык помечен `kk` |
+
+В одном из шести прогонов первый ход получил 503 от LLM: интерфейс показал ошибку с `request_id`, агент озвучил «Не удалось обработать реплику», фиктивного ответа не было.
+
+Unit-тесты подменяют LLM и HTTP и проверяют логику, а не качество речи. Всё, что требует провайдеров, проверялось живыми вызовами.
+
+## Ограничения
+
+Пишем честно, потому что это влияет на оценку:
+
+- **Сквозная задержка** не измеряется: `stt`, `tts_first_audio`, `total` возвращаются как `null`.
+- **Короткие неясные реплики** («Алло, я по поводу страховки») модель иногда относит к сценарию вместо `SYS_UNCLEAR`.
+- **Mixed иногда помечается как `kk`**, если казахских слов больше. На язык ответа это не влияет.
+- **Зона travel** определяется списком стран в коде: база знаний даёт только описание зон. `check_coverage` сравнивает услугу с пакетом по ключевым словам.
+- **Согласие и отказ** разбирает LLM в составе router-вызова, отдельного классификатора нет.
+- Если клиент начинает говорить во время приветствия агента, STT может потерять первое слово. Система переспрашивает, а не угадывает.
+- Удалённый доступ требует HTTPS/WSS и не настроен: демо работает на localhost.
+
+## Структура репозитория
+
+```
+backend/          FastAPI: app.py (HTTP), service.py (сессии, политика, слоты, preview/confirm),
+                  executor.py (31 действие над mock_backend), router.py (LLM-router и reply),
+                  voice.py (LiveKit worker), catalog.py (загрузка JSON кита)
+frontend/         React + Vite симулятор: чат, микрофон, панель трассы, LiveKit-клиент
+scripts/          dev.py (запуск всего), evaluate_router.py, run_dialogs.py,
+                  e2e_live_voice.mjs, smoke_transport.py, install-livekit.ps1
+tests/backend/    pytest: router, service, executor, API и voice-адаптер
+ТЗ/               рабочее ТЗ, план команды, API-контракт, ADR по архитектуре
+*.json            данные кита без изменений · evaluate.py — оценщик организаторов
+THIRD_PARTY.md    происхождение заимствованных фрагментов ALTCALL
+```
+
+## Команда и документы
+
+**Alt-Tab.** Backend, LLM, исполнитель и голосовой контур — Акежан. Frontend и браузерный симулятор — тиммейт команды.
+
+| Документ | Содержание |
+|---|---|
+| [ТЗ/requirements.md](ТЗ/requirements.md) | Рабочее ТЗ: обязательные требования и порядок приёмки |
+| [ТЗ/api-contract.md](ТЗ/api-contract.md) | Контракт API v2 между frontend и backend |
+| [ТЗ/architecture.md](ТЗ/architecture.md) | ADR: почему LiveKit на базе ALTCALL |
+| [frontend/README.md](frontend/README.md) | Симулятор: запуск, режимы Live/Mock, обработка ошибок |
+| [THIRD_PARTY.md](THIRD_PARTY.md) | Что заимствовано из ALTCALL и как |
