@@ -19,6 +19,10 @@ PRODUCTS = ("ogpo", "casco", "travel", "property", "accident", "dms")
 IDENTIFIERS = ("phone", "iin", "policy_number", "claim_number", "vehicle_plate")
 # actions.json error_handling: re-ask the identifier once, then offer another one or an operator.
 REASK_ERRORS = {"not_found", "invalid_input"}
+# Reversible but non-idempotent registrations: the same request in one session is registered once.
+REGISTER_ONCE = {"create_complaint", "report_fraud", "create_callback", "send_sms"}
+# Identifiers are assigned only on execute; a preview must not look like a finished operation.
+ASSIGNED_ON_EXECUTE = ("policy_number", "claim_number", "ticket_id")
 
 
 class RequestConflict(Exception):
@@ -38,6 +42,7 @@ class Session:
     client: dict | None = None
     pending: dict | None = None
     retries: dict = field(default_factory=dict)
+    done: dict = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def context(self):
@@ -63,6 +68,7 @@ class Staged:
     pending: dict | None
     retries: dict
     queued: list
+    done: dict = field(default_factory=dict)
     active: str | None = None
     decision: str = "execute"
     actions: list = field(default_factory=list)
@@ -70,6 +76,7 @@ class Staged:
     missing_alternatives: list | None = None
     handoff: dict | None = None
     warnings: list = field(default_factory=list)
+    invalid: list = field(default_factory=list)
     confirmation_cancelled: bool = False
     low_confidence: int = 0
 
@@ -169,7 +176,7 @@ class TurnService:
                 "server_processing_ms": (perf_counter() - start) * 1000, "warnings": t.warnings,
             }
             session.data, session.slots, session.queued_scenarios = t.data, t.slots, t.queued
-            session.client, session.pending, session.retries = t.client, t.pending, t.retries
+            session.client, session.pending, session.retries, session.done = t.client, t.pending, t.retries, t.done
             session.active_scenario = t.active if t.decision in {"collect_slots", "clarify", "confirm"} else None
             session.low_confidence = t.low_confidence
             session.history.extend([{"role": "user", "content": request.text}, {"role": "assistant", "content": reply}])
@@ -181,7 +188,7 @@ class TurnService:
     def _decide(self, session, route, text):
         t = Staged(data=deepcopy(session.data), slots=deepcopy(session.slots), client=deepcopy(session.client),
                    pending=deepcopy(session.pending), retries=dict(session.retries),
-                   queued=list(session.queued_scenarios))
+                   queued=list(session.queued_scenarios), done=dict(session.done))
         invalid = []
         for key, value in route.slots.items():
             if value is None:
@@ -190,6 +197,7 @@ class TurnService:
                 t.slots[key] = value
             else:
                 invalid.append(key)
+        t.invalid = invalid
         t.warnings = [{"stage": "slots", "code": "invalid_input", "message": f"Некорректный слот: {k}"} for k in invalid]
         primary = route.scenarios[0]
         scenario = self.catalog.scenarios.get(primary.scenario_id)
@@ -271,6 +279,10 @@ class TurnService:
         t.missing = [n for n in required if empty(t.slots.get(n))]
         if not t.missing and needs_client and not t.client and not any(t.slots.get(k) for k in IDENTIFIERS):
             t.missing = ["phone"]
+        # A value the client just gave in a bad format is re-asked first (e.g. a misheard phone).
+        retry = [n for n in t.invalid if n in required or (needs_client and n in IDENTIFIERS)]
+        if retry:
+            t.missing = retry[:1] + [n for n in t.missing if n != retry[0]]
         if t.missing:
             t.decision = "collect_slots"
             if "policy_number" in t.missing and needs_client and not t.client:
@@ -280,7 +292,11 @@ class TurnService:
         # 4. Actions in catalog order.
         params = {**t.slots, **self._client_facts(t), "queue": queue,
                   "product_type": t.slots.get("product_type") or product,
-                  "topic": t.slots.get("topic") or scenario["slug"]}
+                  "topic": t.slots.get("topic") or scenario["slug"].replace("_", " ")}
+        if empty(params.get("region")) and params.get("vehicle_plate"):
+            # knowledge_base.products.ogpo.pricing.region_by_plate_code: the plate suffix names the region.
+            codes = self.catalog.knowledge["products"]["ogpo"]["pricing"]["region_by_plate_code"]
+            params["region"] = codes.get(str(params["vehicle_plate"])[-2:], codes["default"])
         results = {}
         for index, name in enumerate(names):
             if name == "find_client":
@@ -328,6 +344,7 @@ class TurnService:
                 inputs = [alt for group in self.catalog.actions[name]["inputs"] for alt in group.split("|")]
                 shown = {k: params[k] for k in inputs if params.get(k) is not None}
                 shown.update({k: v for k, v in params.items() if k in self.catalog.slots and k not in shown})
+                preview = {k: v for k, v in preview.items() if k not in ASSIGNED_ON_EXECUTE}
                 t.actions.append({"name": name, "mode": "preview", "status": "ok", "result": preview})
                 t.pending = {"confirmation_id": str(uuid4()), "action": name, "parameters": shown,
                              "summary": name + ": " + ", ".join(f"{k}={v}" for k, v in {**shown, **preview}.items()),
@@ -336,7 +353,7 @@ class TurnService:
                 return
             if not self._act(t, name, params, scenario, results):
                 return
-            params.update({k: v for k, v in results[name].items() if k not in ("simulated",)})
+            params.update({k: v for k, v in results.get(name, {}).items() if k not in ("simulated",)})
         t.decision, t.active = "execute", None
 
     def _execute_pending(self, t, text):
@@ -360,13 +377,22 @@ class TurnService:
     # ---- helpers ------------------------------------------------------------------
 
     def _act(self, t, name, params, scenario, results=None):
-        try:
-            result = self.executor.run(name, params, t.data)
-        except ActionError as exc:
-            t.actions.append({"name": name, "mode": "execute", "status": "error",
-                              "error": {"code": exc.code, "message": exc.message}})
-            self._on_error(t, name, exc, scenario, params)
-            return False
+        inputs = [alt for group in self.catalog.actions[name]["inputs"] for alt in group.split("|")]
+        key = f"{scenario['scenario_id']}:{name}:" + repr(sorted((k, params.get(k)) for k in inputs))
+        if name in REGISTER_ONCE and key in t.done:
+            result = dict(t.done[key], already_registered=True)
+        else:
+            try:
+                result = self.executor.run(name, params, t.data)
+            except ActionError as exc:
+                t.actions.append({"name": name, "mode": "execute", "status": "error",
+                                  "error": {"code": exc.code, "message": exc.message}})
+                if name == "kb_lookup":
+                    return True  # the reply still has the whole knowledge base; nothing to re-ask
+                self._on_error(t, name, exc, scenario, params)
+                return False
+            if name in REGISTER_ONCE:
+                t.done[key] = result
         t.actions.append({"name": name, "mode": "execute", "status": "ok", "result": result})
         if results is not None:
             results[name] = result
@@ -420,6 +446,8 @@ class TurnService:
                         if p.get("status") != "cancelled" and p["end_date"] >= self.catalog.as_of_date]
             if len(policies) == 1:
                 t.slots["policy_number"] = policies[0]["policy_number"]
+        if "city" in wanted and empty(t.slots.get("city")) and t.client.get("city") in self.catalog.slots["city"]["values"]:
+            t.slots["city"] = t.client["city"]  # the client's registered city, as in the kit dialogs
         if "claim_number" in wanted and empty(t.slots.get("claim_number")):
             claims = [c for c in t.data["claims"] if c["client_id"] == t.client["client_id"]]
             if len(claims) == 1:

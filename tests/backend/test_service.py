@@ -184,3 +184,60 @@ async def test_always_handoff_comes_from_catalog():
     result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Дайте оператора"))
     assert result["decision"] == "handoff"
     assert result["handoff"]["queue"] == "operator_general"
+
+
+async def test_registration_is_not_repeated_and_kb_miss_does_not_block():
+    catalog = Catalog()
+    router = ScriptedRouter(scenario="SC38", slots={"fraud_details": "Просили код из SMS"})
+    service = TurnService(catalog, router)
+    session = service.create_session()
+    first = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Звонили мошенники"))
+    assert first["decision"] == "execute"
+    ticket = [a for a in first["actions"] if a["name"] == "report_fraud"][0]["result"]["ticket_id"]
+    second = await service.handle_turn(session.id, TurnRequest(request_id="b", text="Нет, код не сообщал"))
+    again = [a for a in second["actions"] if a["name"] == "report_fraud"][0]
+    assert again["result"]["ticket_id"] == ticket and again["result"].get("already_registered")
+    assert len(session.data.get("tickets", [])) == 1
+
+
+async def test_preview_hides_identifiers_assigned_on_execute():
+    catalog = Catalog()
+    router = ScriptedRouter(scenario="SC02", slots={"vehicle_plate": "482KMA02", "vehicle_type": "car", "drivers_iin": ["910512300456"], "phone": "+77071234567"})
+    service = TurnService(catalog, router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Оформите ОГПО"))
+    preview = [a for a in result["actions"] if a["name"] == "create_policy"][0]
+    assert preview["mode"] == "preview" and "policy_number" not in preview["result"]
+    assert result["actions"][0]["result"]["price"] == 38000  # region almaty derived from plate code 02
+    router.confirmation = "yes"
+    result = await service.handle_turn(session.id, TurnRequest(request_id="b", text="Да"))
+    executed = [a for a in result["actions"] if a["name"] == "create_policy"][0]
+    assert executed["mode"] == "execute" and executed["result"]["policy_number"].startswith("SQ-OGPO-")
+
+
+async def test_misheard_identifier_is_reasked_before_other_slots():
+    router = ScriptedRouter(scenario="SC28", slots={"phone": "+7701000010"})  # 10 digits after +7 needed
+    service = TurnService(Catalog(), router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Телефон плюс жеті..."))
+    assert result["warnings"][0]["message"].endswith("phone")
+    assert result["missing_slots"][0] == "phone"
+
+
+async def test_kb_topic_from_scenario_slug_is_found():
+    router = ScriptedRouter(scenario="SC38", slots={"fraud_details": "Просили код"})
+    service = TurnService(Catalog(), router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Мошенники"))
+    kb = [a for a in result["actions"] if a["name"] == "kb_lookup"][0]
+    assert kb["status"] == "ok" and "fraud_policy" in kb["result"]["answer"]
+
+
+async def test_identified_client_city_fills_appointment_city():
+    router = ScriptedRouter(scenario="SC21", slots={"phone": "+77010000002", "doctor_specialty": "therapist", "preferred_date": "2026-10-02"})
+    service = TurnService(Catalog(), router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Терапевтке жазып қойыңызшы"))
+    assert result["slots"]["city"] == "Astana" and result["slots"]["policy_number"] == "SQ-DMS-604220"
+    assert result["decision"] == "confirm"
+    assert result["actions"][-1]["result"]["clinic_name"] == "Saulet Medical"
