@@ -4,7 +4,7 @@ import re
 import pytest
 
 from backend.catalog import Catalog
-from backend.config import ROOT
+from backend.config import CASE_DIR, ROOT
 from backend.executor import ActionError, Executor
 
 
@@ -181,6 +181,6 @@ def test_all_actions_have_handlers_and_irreversible_matches(ex, catalog):
 
 def test_error_codes_are_from_actions_json():
     source = (ROOT / "backend" / "executor.py").read_text(encoding="utf-8")
-    allowed = set(json.loads((ROOT / "actions.json").read_text(encoding="utf-8"))["error_codes"])
+    allowed = set(json.loads((CASE_DIR / "actions.json").read_text(encoding="utf-8"))["error_codes"])
     used = set(re.findall(r'ActionError\("([a-z_]+)"', source))
     assert used and used <= allowed

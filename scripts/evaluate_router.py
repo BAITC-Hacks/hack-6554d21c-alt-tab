@@ -19,7 +19,7 @@ async def main():
     parser.add_argument("--concurrency", type=int, default=4)
     args = parser.parse_args()
     router = Router(Catalog(), Settings.from_env())
-    rows = json.loads((ROOT / "dev_utterances.json").read_text(encoding="utf-8"))["utterances"]
+    rows = json.loads((ROOT / "case" / "dev_utterances.json").read_text(encoding="utf-8"))["utterances"]
     inputs = [{"id": row["id"], "text": row["text"]} for row in rows]
     predictions, failed, done = {}, [], 0
     semaphore = asyncio.Semaphore(args.concurrency)
@@ -48,7 +48,7 @@ async def main():
     for utterance_id, error in failed:
         print(f"FAILED {utterance_id}: {error}")
     print(f"{len(inputs) - len(failed)}/{len(inputs)} predictions from the real router; {len(failed)} failed")
-    print(f"python evaluate.py {args.output} dev_utterances.json")
+    print(f"python case/evaluate.py {args.output} case/dev_utterances.json")
 
 
 if __name__ == "__main__":

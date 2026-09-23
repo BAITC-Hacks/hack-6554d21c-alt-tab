@@ -1,11 +1,11 @@
 import json
 from copy import deepcopy
 
-from .config import ROOT
+from .config import CASE_DIR
 
 
 class Catalog:
-    def __init__(self, root=ROOT):
+    def __init__(self, root=CASE_DIR):
         def read(name):
             return json.loads((root / f"{name}.json").read_text(encoding="utf-8"))
         data = read("scenarios")

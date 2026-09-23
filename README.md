@@ -4,7 +4,7 @@
 
 Команда **Alt-Tab** · HackAlem AI 2026 · кейс 2 «Voice Router»
 
-> Данные стартового кита (`scenarios.json`, `slots.json`, `actions.json`, `knowledge_base.json`, `mock_backend.json`, `dev_utterances.json`, `dialogs_sample.json`, `evaluate.py`) сохранены без изменений и загружаются с диска. Все данные синтетические: Saqta Insurance, клиенты, полисы и цены вымышлены организаторами.
+> Все вводные организаторов собраны в папке [case/](case/): JSON-данные (`scenarios.json`, `slots.json`, `actions.json`, `knowledge_base.json`, `mock_backend.json`, `dev_utterances.json`, `dialogs_sample.json`), оценщик `evaluate.py`, README кита на трёх языках и исходный текст задания. Файлы сохранены без изменений, приложение загружает их с диска. Все данные синтетические: Saqta Insurance, клиенты, полисы и цены вымышлены организаторами.
 
 ---
 
@@ -219,7 +219,7 @@ npm run dev
 ```powershell
 .venv/Scripts/python -m pytest -q                     # 38 backend-тестов: router, service, executor, API, voice
 .venv/Scripts/python scripts/evaluate_router.py       # predictions реальным LLM → artifacts/
-.venv/Scripts/python evaluate.py artifacts/predictions.json dev_utterances.json
+.venv/Scripts/python case/evaluate.py artifacts/predictions.json case/dev_utterances.json
 .venv/Scripts/python scripts/run_dialogs.py           # 10 диалогов кита через живой API → отчёт
 .venv/Scripts/python scripts/smoke_transport.py       # API + LiveKit подключение
 ```
@@ -265,8 +265,9 @@ frontend/         React + Vite симулятор: чат, микрофон, п�
 scripts/          dev.py (запуск всего), evaluate_router.py, run_dialogs.py,
                   e2e_live_voice.mjs, smoke_transport.py, install-livekit.ps1
 tests/backend/    pytest: router, service, executor, API и voice-адаптер
+case/             вводные организаторов без изменений: 7 JSON-файлов данных, evaluate.py,
+                  README кита (en/ru/kz), task-original.txt — исходный текст задания
 ТЗ/               api-contract.md — контракт API v2 между frontend и backend
-*.json            данные кита без изменений · evaluate.py — оценщик организаторов
 THIRD_PARTY.md    происхождение заимствованных фрагментов ALTCALL
 ```
 

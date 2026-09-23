@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATA = ROOT / "dialogs_sample.json"
+DEFAULT_DATA = ROOT / "case" / "dialogs_sample.json"
 TIMEOUT_S = 90
 
 

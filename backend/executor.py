@@ -8,7 +8,7 @@ import json
 import re
 from datetime import date, timedelta
 
-from .config import ROOT
+from .config import CASE_DIR
 
 DATE_FMT = "%Y-%m-%d"
 
@@ -86,7 +86,7 @@ class Executor:
         self.slots = catalog.slots
         self.as_of = date.fromisoformat(catalog.as_of_date)
         try:
-            raw = json.loads((ROOT / "actions.json").read_text(encoding="utf-8"))
+            raw = json.loads((CASE_DIR / "actions.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raw = {}
         self.error_codes = set(raw.get("error_codes") or

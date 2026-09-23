@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+CASE_DIR = ROOT / "case"  # данные кита: JSON, evaluate.py, README организаторов
 
 
 @dataclass(frozen=True)
