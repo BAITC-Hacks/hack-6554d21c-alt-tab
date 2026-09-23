@@ -40,9 +40,10 @@ powershell -ExecutionPolicy Bypass -File scripts/install-livekit.ps1
 ```
 
 Одна команда запускает локальный LiveKit, HTTP API и голосовой worker. API: <http://127.0.0.1:8000/docs>.
-Интерфейс в `frontend/` делает тиммейт (ветка `codex/frontend-simulator`, Vite на 5174
-с proxy `/api` → 8000). До слияния в `main` его запускают из отдельного checkout этой ветки:
-`npm ci && npm run dev` в `frontend/`, затем открыть <http://127.0.0.1:5174>.
+Интерфейс в `frontend/` (тиммейт, влит в `main` из `codex/frontend-simulator`): Vite на 5174
+с proxy `/api` → 8000. Запуск отдельным процессом: `npm ci && npm run dev` в `frontend/`,
+затем открыть <http://127.0.0.1:5174>. Подробности — [frontend/README.md](frontend/README.md).
+Автоматический браузерный прогон голоса: `scripts/e2e_live_voice.mjs` (см. «Проверки»).
 
 Только API, без голосового worker:
 
@@ -126,6 +127,9 @@ Soniox напрямую, без браузера: TTS RU/KK — первый з�
 
 Проверено 2026-09-23 в браузере на frontend тиммейта (коммит 76d46b8): headless Chrome
 с fake-микрофоном, в который подан WAV из Soniox TTS, → Vite → API → LiveKit → worker.
+Повтор: при запущенных `scripts/dev.py` и `npm run dev` выполнить
+`node scripts/e2e_live_voice.mjs <реплика.wav> <папка для лога и скриншота>`
+(нужен установленный Chrome; WAV — 2 с тишины, речь, тишина для endpointing).
 Четыре реплики распознаны дословно и озвучены; трасса пришла по data channel и в
 истории сервера:
 
