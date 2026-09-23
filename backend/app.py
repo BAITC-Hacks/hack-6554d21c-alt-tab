@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import timedelta
 import json
+import logging
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -12,6 +13,8 @@ from .config import Settings
 from .models import TurnRequest
 from .router import ProviderError, Router
 from .service import RequestConflict, TurnService
+
+logger = logging.getLogger("saqta.api")
 
 
 def create_app(settings=None, router=None):
@@ -33,6 +36,10 @@ def create_app(settings=None, router=None):
 
     @app.exception_handler(ProviderError)
     async def provider_error(request, exc):
+        # Log the cause class only: provider bodies may echo request data or headers.
+        cause = exc.__cause__
+        logger.warning("provider error on %s: %s (cause: %s, status: %s)", request.url.path, exc,
+                       type(cause).__name__ if cause else "-", getattr(cause, "status_code", "-"))
         return error(503, "provider_unavailable", str(exc), True)
 
     @app.exception_handler(RequestConflict)
