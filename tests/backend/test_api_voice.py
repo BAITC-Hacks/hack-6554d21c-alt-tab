@@ -27,6 +27,7 @@ def test_livekit_token_is_room_scoped_with_named_dispatch():
     settings = Settings(openai_api_key="test-openai", soniox_api_key="test-soniox",
                         livekit_api_secret="test-secret-long-enough-for-signing-123456")
     with TestClient(create_app(settings)) as client:
+        assert client.get("/api/health").json()["voice_ready"] is True
         session_id = client.post("/api/sessions", json={}).json()["session_id"]
         result = client.post(f"/api/sessions/{session_id}/livekit")
         assert result.status_code == 200
