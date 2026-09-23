@@ -86,7 +86,7 @@ async def entrypoint(ctx: JobContext):
         )
 
     speech = soniox.TTS(api_key=settings.soniox_api_key, model=settings.tts_model,
-                        voice=settings.voice, language="ru", speed=1.0)
+                        voice=settings.voice, language="ru", speed=1.1)
     speech.prewarm()
     session = AgentSession(
         stt=soniox.STT(api_key=settings.soniox_api_key, params=stt_options(settings)),
