@@ -76,8 +76,10 @@ async def test_voice_provider_failure_does_not_emit_success():
         agent = SaqtaAgent("session1", http, None, publish)
         context = llm.ChatContext()
         context.add_message(role="user", content="Где офис?")
-        assert [chunk async for chunk in agent.llm_node(context, [], None)] == []
-    assert packets[0][0] == "saqta.error"
+        spoken = [chunk async for chunk in agent.llm_node(context, [], None)]
+    # The caller hears the error itself, never a made-up answer, and no trace is published.
+    assert [topic for topic, _ in packets] == ["saqta.error"]
+    assert spoken == [packets[0][1]["message"]]
 
 
 def test_reused_soniox_config_has_ru_kk_and_no_speculative_actions():

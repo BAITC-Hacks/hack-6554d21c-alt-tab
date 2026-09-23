@@ -35,17 +35,22 @@ class Session:
 
 def valid_slot(spec, value):
     kind = spec["type"]
-    if kind in {"string", "text", "enum", "date"} and not isinstance(value, str):
+    if kind in {"string", "text", "date"} and not isinstance(value, str):
         return False
     if kind == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
         return False
     if kind == "boolean" and not isinstance(value, bool):
         return False
-    if kind == "list" and not isinstance(value, list):
-        return False
+    if kind == "list":
+        # The pattern applies to each element (e.g. drivers_iin), not to str(list).
+        if not isinstance(value, list) or not value:
+            return False
+        return all(isinstance(v, str) and (not spec.get("pattern") or re.fullmatch(spec["pattern"], v))
+                   for v in value)
     if spec.get("pattern") and not re.fullmatch(spec["pattern"], str(value)):
         return False
-    if kind == "enum" and value not in spec["values"]:
+    # Enum values in slots.json can be int (franchise, sum_insured) or str.
+    if kind == "enum" and (isinstance(value, bool) or value not in spec["values"]):
         return False
     if kind == "date":
         try:
@@ -84,6 +89,8 @@ class TurnService:
             slots = deepcopy(session.slots)
             invalid = []
             for key, value in route.slots.items():
+                if value is None:
+                    continue  # the model marks unknown slots as null; that is not an input error
                 if valid_slot(self.catalog.slots[key], value):
                     slots[key] = value
                 else:
@@ -100,12 +107,16 @@ class TurnService:
                 decision = "out_of_scope"
             elif primary.scenario_id == "SYS_UNCLEAR" or primary.confidence < .75:
                 decision, active = "clarify", session.active_scenario
-            if low_confidence >= 2 or primary.scenario_id == "SC37":
+            always_handoff = bool(scenario) and (scenario.get("handoff") or {}).get("when") == "always"
+            if low_confidence >= 2 or always_handoff:
                 decision = "handoff"
-                handoff = {"queue": "operator_general", "summary": request.text}
+                queue = (scenario.get("handoff") or {}).get("queue", "operator_general") if always_handoff else "operator_general"
+                handoff = {"queue": queue, "summary": request.text}
             elif scenario and decision == "execute":
-                missing = [name for name in scenario["slots"]["required"] if slots.get(name) in (None, "", [])]
-                missing.extend(k for k in invalid if k not in missing)
+                required = scenario["slots"]["required"]
+                missing = [name for name in required if slots.get(name) in (None, "", [])]
+                # Re-ask only required slots the model filled with a bad value.
+                missing.extend(k for k in invalid if k in required and k not in missing)
                 if missing:
                     decision = "collect_slots"
                 else:

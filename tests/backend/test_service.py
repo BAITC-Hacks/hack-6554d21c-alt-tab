@@ -92,3 +92,34 @@ async def test_two_low_confidence_turns_handoff():
     result = await service.handle_turn(session.id, TurnRequest(request_id="b", text="И ещё непонятно"))
     assert result["decision"] == "handoff"
     assert result["handoff"]["queue"] == "operator_general"
+
+
+def test_slot_validation_follows_slots_json_types():
+    slots = Catalog().slots
+    from backend.service import valid_slot
+    assert valid_slot(slots["drivers_iin"], ["123456789012"])
+    assert not valid_slot(slots["drivers_iin"], ["12345"])
+    assert not valid_slot(slots["drivers_iin"], [])
+    assert valid_slot(slots["sum_insured"], 1000000)
+    assert not valid_slot(slots["sum_insured"], 1234)
+    assert valid_slot(slots["franchise"], 0)
+    assert not valid_slot(slots["franchise"], False)
+
+
+async def test_null_and_optional_slots_do_not_block_execution():
+    router = ScriptedRouter(scenario="SC23", slots={"city": "Almaty", "doctor_specialty": None})
+    service = TurnService(Catalog(), router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Клиники в Алматы"))
+    assert result["decision"] == "execute"
+    assert result["missing_slots"] == []
+    assert result["warnings"] == []
+
+
+async def test_always_handoff_comes_from_catalog():
+    router = ScriptedRouter(scenario="SC37")
+    service = TurnService(Catalog(), router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Дайте оператора"))
+    assert result["decision"] == "handoff"
+    assert result["handoff"]["queue"] == "operator_general"

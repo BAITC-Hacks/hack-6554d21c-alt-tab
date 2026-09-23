@@ -58,8 +58,11 @@ class SaqtaAgent(Agent):
             response.raise_for_status()
             result = response.json()
         except (httpx.HTTPError, ValueError):
+            message = "Не удалось обработать реплику. Повторите запрос."
             await self.publish("saqta.error", {"stage": "router", "request_id": request_id,
-                                               "message": "Не удалось обработать реплику. Повторите запрос."})
+                                               "message": message})
+            # A voice-only caller must hear that the turn failed, not silence.
+            yield message
             return
         self.speech.update_options(language=result["response_language"])
         await self.publish("saqta.trace", result)
@@ -70,7 +73,8 @@ async def entrypoint(ctx: JobContext):
     settings = Settings.from_env()
     metadata = json.loads(ctx.job.metadata or "{}")
     session_id = metadata.get("session_id")
-    if not session_id or ctx.room.name != f"saqta-{session_id}":
+    # ctx.room.name is empty before connect(); the job carries the room name.
+    if not session_id or ctx.job.room.name != f"saqta-{session_id}":
         raise ValueError("Invalid Saqta room metadata")
     await ctx.connect()
     http = httpx.AsyncClient(base_url=settings.backend_url, timeout=95)
