@@ -114,7 +114,9 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(cleanup)
     await session.start(room=ctx.room, agent=SaqtaAgent(session_id, http, speech, publish))
     await publish("saqta.ready", {"session_id": session_id, "mode": "live"})
-    session.say("Здравствуйте! Я ИИ-помощник Saqta. Чем могу помочь?")
+    # The greeting is Kazakh; each reply is then voiced in the language the router chose.
+    speech.update_options(language="kk")
+    session.say("Сәлеметсіз бе! Мен Saqta ИИ-көмекшісімін. Сізге қалай көмектесе аламын?")
 
 
 def main():
