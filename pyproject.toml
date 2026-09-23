@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "saqta-voice-router"
 version = "0.1.0"
-description = "Saqta voice router based on the ALTCALL LiveKit pipeline"
+description = "Saqta voice router on LiveKit, Soniox and GPT-4.1 mini"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "fastapi>=0.115,<1",

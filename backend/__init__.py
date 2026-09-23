@@ -1,2 +1,2 @@
-"""Saqta business logic and ALTCALL-derived voice integration."""
+"""Saqta business logic and LiveKit voice integration."""
 

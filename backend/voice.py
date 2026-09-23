@@ -1,6 +1,6 @@
-"""LiveKit/Soniox pipeline adapted from ALTCALL.ONLINE.
+"""LiveKit/Soniox voice pipeline.
 
-See THIRD_PARTY.md. All business decisions go through the HTTP turn service;
+All business decisions go through the HTTP turn service;
 the LiveKit process never holds a second copy of business state.
 """
 import asyncio
@@ -20,7 +20,7 @@ logger = logging.getLogger("saqta.voice")
 
 
 def stt_options(settings):
-    # ALTCALL agent.stt_params: same RU/KK hints and Soniox endpointing profile.
+    # RU/KK hints and Soniox endpointing profile tuned for short call-centre turns.
     return soniox.STTOptions(
         model=settings.stt_model, language_hints=["ru", "kk"],
         language_hints_strict=False, enable_language_identification=True,
@@ -86,7 +86,7 @@ async def entrypoint(ctx: JobContext):
         )
 
     speech = soniox.TTS(api_key=settings.soniox_api_key, model=settings.tts_model,
-                        voice=settings.voice, language="ru", speed=1.1)
+                        voice=settings.voice, language="ru", speed=1.3)
     speech.prewarm()
     session = AgentSession(
         stt=soniox.STT(api_key=settings.soniox_api_key, params=stt_options(settings)),

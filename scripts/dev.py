@@ -28,7 +28,7 @@ def main():
             if sys.platform == "win32" and native.exists():
                 processes.append(subprocess.Popen([str(native), "--dev", "--bind", "127.0.0.1"], cwd=ROOT))
             else:
-                subprocess.run(["docker", "compose", "up", "-d", "livekit"], cwd=ROOT, check=True)
+                subprocess.run(["docker", "compose", "-f", "deploy/compose.yaml", "up", "-d", "livekit"], cwd=ROOT, check=True)
                 docker_started = True
         processes.append(subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.app:app",
                                            "--host", "127.0.0.1", "--port", "8000"], cwd=ROOT))
@@ -55,7 +55,7 @@ def main():
                 except subprocess.TimeoutExpired:
                     process.kill()
         if docker_started:
-            subprocess.run(["docker", "compose", "stop", "livekit"], cwd=ROOT, check=False)
+            subprocess.run(["docker", "compose", "-f", "deploy/compose.yaml", "stop", "livekit"], cwd=ROOT, check=False)
 
 
 if __name__ == "__main__":

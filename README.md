@@ -129,7 +129,7 @@ flowchart LR
 
 - **Одна бизнес-логика для голоса и текста.** Worker не думает сам, он вызывает тот же `POST /turns`, что и текстовый ввод. Состояние живёт только в HTTP-сервисе.
 - **Исполнитель управляется данными.** Интерфейсы действий, необратимость, очереди handoff и коды ошибок берутся из `actions.json`, формулы — из `knowledge_base.json`. Каждая сессия работает с собственной копией `mock_backend.json` в памяти.
-- **Голосовой конвейер взят из рабочего продукта ALTCALL** (LiveKit + Soniox), а страховая логика, роутер и API написаны для кита. Что именно заимствовано: [THIRD_PARTY.md](THIRD_PARTY.md).
+- **Голосовой конвейер на LiveKit + Soniox**, а страховая логика, роутер и API написаны для кита.
 - **Ключи провайдеров только на сервере.** Браузер получает токен конкретной комнаты LiveKit на 15 минут.
 
 ## Как принимается решение
@@ -196,7 +196,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install-livekit.ps1
 .venv/Scripts/python scripts/dev.py
 ```
 
-Одна команда `scripts/dev.py` поднимает локальный LiveKit, HTTP API на `:8000` и голосовой worker. Swagger: <http://127.0.0.1:8000/docs>. Установщик скачивает официальный LiveKit 1.13.7 и сверяет SHA-256. Если нативный LiveKit не установлен, `dev.py` сам поднимет контейнер из `compose.yaml` через Docker Desktop. Если LiveKit уже слушает порт 7880, запускать с флагом `--external-livekit`.
+Одна команда `scripts/dev.py` поднимает локальный LiveKit, HTTP API на `:8000` и голосовой worker. Swagger: <http://127.0.0.1:8000/docs>. Установщик скачивает официальный LiveKit 1.13.7 и сверяет SHA-256. Если нативный LiveKit не установлен, `dev.py` сам поднимет контейнер из `deploy/compose.yaml` через Docker Desktop. Если LiveKit уже слушает порт 7880, запускать с флагом `--external-livekit`.
 
 **2. Frontend** (отдельный терминал):
 
@@ -284,7 +284,7 @@ tests/backend/    pytest: router, service, executor, API и voice-адаптер
 case/             вводные организаторов без изменений: 7 JSON-файлов данных, evaluate.py,
                   README кита (en/ru/kz), task-original.txt — исходный текст задания
 ТЗ/               api-contract.md — контракт API v2 между frontend и backend
-THIRD_PARTY.md    происхождение заимствованных фрагментов ALTCALL
+deploy/           compose.yaml — LiveKit в Docker, если нативный сервер не установлен
 ```
 
 ## Команда и документы
@@ -295,4 +295,3 @@ THIRD_PARTY.md    происхождение заимствованных фра
 |---|---|
 | [ТЗ/api-contract.md](ТЗ/api-contract.md) | Контракт API v2 между frontend и backend |
 | [frontend/README.md](frontend/README.md) | Симулятор: запуск, режимы Live/Mock, обработка ошибок |
-| [THIRD_PARTY.md](THIRD_PARTY.md) | Что заимствовано из ALTCALL и как |

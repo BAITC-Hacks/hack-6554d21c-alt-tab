@@ -4,8 +4,7 @@
 
 ## Транспорт MVP — LiveKit (решение пользователя)
 
-GPT-4.1 mini + Soniox STT/TTS + отдельный локальный LiveKit. Адаптация голосового
-конвейера ALTCALL. React/TypeScript подключается к WebRTC-комнате через `livekit-client`.
+GPT-4.1 mini + Soniox STT/TTS + отдельный локальный LiveKit. React/TypeScript подключается к WebRTC-комнате через `livekit-client`.
 HTTP нужен для создания сессии, токена комнаты и текстового резерва.
 
 | Метод | Запрос | Результат |

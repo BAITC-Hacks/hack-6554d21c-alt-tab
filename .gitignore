@@ -15,3 +15,4 @@ artifacts/
 /ТЗ/*
 !/ТЗ/api-contract.md
 /AGENTS.md
+.DS_Store
