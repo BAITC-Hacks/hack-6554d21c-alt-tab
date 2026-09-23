@@ -30,4 +30,8 @@ class RouteDecision(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
     slots: dict[str, Any]
     is_continuation: bool
+    # Set only while state.pending_confirmation exists: explicit consent or refusal.
+    confirmation: Literal["yes", "no"] | None = None
+    # Short evidence when the active scenario's handoff.when condition is met by the utterance.
+    handoff_reason: str | None = None
 

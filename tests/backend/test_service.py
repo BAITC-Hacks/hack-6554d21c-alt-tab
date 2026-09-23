@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from backend.catalog import Catalog
-from backend.models import RouteDecision, TurnRequest
+from backend.models import RouteDecision, ScenarioChoice, TurnRequest
 from backend.router import ProviderError
 from backend.service import RequestConflict, TurnService
 
@@ -14,6 +14,7 @@ class ScriptedRouter:
         self.scenario, self.slots, self.confidence = scenario, slots or {}, confidence
         self.calls, self.contexts = 0, []
         self.reply_fails = False
+        self.confirmation, self.handoff_reason = None, None
 
     async def route(self, text, state):
         self.calls += 1
@@ -21,7 +22,8 @@ class ScriptedRouter:
         await asyncio.sleep(0)
         return RouteDecision(scenarios=[{"scenario_id": self.scenario, "confidence": self.confidence}],
                              alternatives=[], language="ru", response_language="ru",
-                             reason="Test router", slots=self.slots, is_continuation=bool(state["active_scenario"]))
+                             reason="Test router", slots=self.slots, is_continuation=bool(state["active_scenario"]),
+                             confirmation=self.confirmation, handoff_reason=self.handoff_reason)
 
     async def reply(self, text, context):
         if self.reply_fails:
@@ -72,16 +74,75 @@ async def test_provider_failure_leaves_state_unchanged():
     assert session.results == {}
 
 
-async def test_unsupported_irreversible_operation_is_not_success():
+async def test_irreversible_operation_stops_at_preview_until_consent():
     catalog = Catalog()
-    router = ScriptedRouter(scenario="SC28", slots={"policy_number": "SQ-OGPO-104501", "cancel_reason": "sale"})
+    router = ScriptedRouter(scenario="SC28", slots={"policy_number": "SQ-CASCO-204350", "cancel_reason": "Car sold"})
     service = TurnService(catalog, router)
     session = service.create_session()
     before = deepcopy(session.data)
     result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Расторгните полис"))
-    assert result["decision"] in {"collect_slots", "handoff"}
-    assert result["actions"] == []
-    assert session.data == before
+    assert result["decision"] == "confirm"
+    preview = [a for a in result["actions"] if a["name"] == "cancel_policy"][0]
+    assert preview["mode"] == "preview" and preview["result"]["refund_amount"] == 163800
+    assert result["pending_confirmation"]["action"] == "cancel_policy"
+    assert session.data == before  # nothing changed before consent
+    # Refusal cancels the preview without touching data.
+    router.slots, router.confirmation = {}, "no"
+    result = await service.handle_turn(session.id, TurnRequest(request_id="b", text="Нет, подождите"))
+    assert result["pending_confirmation"] is None and session.data == before
+    # New preview, then explicit consent executes exactly once.
+    router.confirmation = None
+    result = await service.handle_turn(session.id, TurnRequest(request_id="c", text="Да, всё же расторгните"))
+    assert result["decision"] == "confirm"
+    router.confirmation = "yes"
+    result = await service.handle_turn(session.id, TurnRequest(request_id="d", text="Да, подтверждаю"))
+    executed = [a for a in result["actions"] if a["name"] == "cancel_policy"][0]
+    assert executed["mode"] == "execute" and executed["status"] == "ok"
+    assert result["pending_confirmation"] is None and result["decision"] == "execute"
+    policy = [p for p in session.data["policies"] if p["policy_number"] == "SQ-CASCO-204350"][0]
+    assert policy["status"] == "cancelled"
+    # Replay of the same request does not execute again; a second "yes" has no pending action.
+    replay = await service.handle_turn(session.id, TurnRequest(request_id="d", text="Да, подтверждаю"))
+    assert replay == result
+    again = await service.handle_turn(session.id, TurnRequest(request_id="e", text="Да"))
+    assert not [a for a in again["actions"] if a["name"] == "cancel_policy" and a["mode"] == "execute" and a["status"] == "ok"]
+
+
+async def test_identification_by_phone_fills_policy_and_unknown_client_is_reasked_once():
+    catalog = Catalog()
+    router = ScriptedRouter(scenario="SC25", slots={"phone": "+77010000008"})
+    service = TurnService(catalog, router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Проверьте мой полис"))
+    assert result["decision"] == "execute"
+    names = [a["name"] for a in result["actions"]]
+    assert names == ["find_client", "get_policy"]
+    assert result["slots"]["policy_number"] == "SQ-OGPO-103990"
+    router = ScriptedRouter(scenario="SC25", slots={"phone": "+77010000099"})
+    service = TurnService(catalog, router)
+    session = service.create_session()
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Проверьте полис"))
+    assert result["decision"] == "collect_slots" and result["missing_slots"] == ["phone"]
+    assert result["actions"][0]["status"] == "error" and result["actions"][0]["error"]["code"] == "not_found"
+    result = await service.handle_turn(session.id, TurnRequest(request_id="b", text="+77010000099"))
+    assert result["decision"] == "handoff"
+
+
+async def test_multi_intent_runs_next_queued_scenario_after_primary():
+    catalog = Catalog()
+    router = ScriptedRouter(scenario="SC33", slots={"city": "Almaty"})
+    service = TurnService(catalog, router)
+    session = service.create_session()
+    orig = router.route
+
+    async def route(text, state):
+        decision = await orig(text, state)
+        decision.scenarios.append(ScenarioChoice(scenario_id="SC23", confidence=.8))
+        return decision
+    router.route = route
+    result = await service.handle_turn(session.id, TurnRequest(request_id="a", text="Офис и клиники в Алматы"))
+    assert [a["name"] for a in result["actions"]] == ["get_offices", "list_clinics"]
+    assert result["queued_scenarios"] == []
 
 
 async def test_two_low_confidence_turns_handoff():
